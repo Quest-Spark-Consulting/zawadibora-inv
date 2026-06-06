@@ -7,7 +7,8 @@ import json, os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'zawadibora-farm-secret-key-2026')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///inventory.db'
+_basedir = os.path.dirname(os.path.abspath(__file__))
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///' + os.path.join(_basedir, 'inventory.db').replace('\\', '/')
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -69,6 +70,15 @@ class Purchase(db.Model):
     date = db.Column(db.String(20), default='')
     notes = db.Column(db.Text, default='')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    items = db.relationship('PurchaseItem', backref='purchase', lazy='dynamic', cascade='all, delete-orphan')
+
+class PurchaseItem(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    purchase_id = db.Column(db.Integer, db.ForeignKey('purchase.id'), nullable=False)
+    raw_material_id = db.Column(db.Integer, db.ForeignKey('raw_material.id'), nullable=False)
+    quantity = db.Column(db.Float, default=0)
+    unit_price = db.Column(db.Float, default=0)
+    raw_material = db.relationship('RawMaterial')
 
 class Production(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -76,6 +86,32 @@ class Production(db.Model):
     quantity_produced = db.Column(db.Float, default=0)
     ingredients = db.Column(db.Text, default='[]')
     date = db.Column(db.String(20), default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class MileageLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    car_id = db.Column(db.Integer, db.ForeignKey('car.id'), nullable=False)
+    date = db.Column(db.String(20), default='')
+    reading = db.Column(db.Float, default=0)
+    distance = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Car(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    registration = db.Column(db.String(50), unique=True, nullable=False)
+    make = db.Column(db.String(100), nullable=False)
+    model = db.Column(db.String(100), default='')
+    year = db.Column(db.Integer, default=0)
+    vehicle_type = db.Column(db.String(50), default='Pickup')
+    fuel_type = db.Column(db.String(20), default='Diesel')
+    mileage = db.Column(db.Float, default=0)
+    purchase_date = db.Column(db.String(20), default='')
+    purchase_price = db.Column(db.Float, default=0)
+    status = db.Column(db.String(20), default='Active')
+    insurance_expiry = db.Column(db.String(20), default='')
+    service_mileage = db.Column(db.Float, default=0)
+    notes = db.Column(db.Text, default='')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Sale(db.Model):
@@ -356,15 +392,18 @@ def purchases():
 @admin_required
 def purchase_save():
     data = request.form
-    qty = float(data.get('quantity', 0))
-    price = float(data.get('unit_price', 0))
-    total = qty * price
-    paid = min(float(data.get('paid_amount', 0)), total)
-    rm_id = int(data.get('raw_material_id'))
-    p = Purchase(raw_material_id=rm_id,
+    with open(os.path.join(_basedir,'debug.log'),'a',encoding='utf-8') as f:
+        f.write(f'SAVE: {dict(data)}\n')
+    items_data = json.loads(data.get('items_json', '[]'))
+    if not items_data:
+        flash('Add at least one item', 'danger')
+        return redirect(url_for('purchases'))
+    total = float(data.get('total_cost', 0)) or sum(float(it.get('qty', 0)) * float(it.get('price', 0)) for it in items_data)
+    paid = min(float(data.get('paid_amount') or 0), total)
+    p = Purchase(
         supplier_id=data.get('supplier_id') and int(data['supplier_id']) or None,
         supplier_name=data.get('supplier_name', ''),
-        quantity=qty, unit_price=price, total_cost=total,
+        quantity=0, unit_price=0, total_cost=total,
         paid_amount=paid, balance=total-paid,
         payment_method=data.get('payment_method', 'Cash'),
         payment_date=data.get('payment_date', today_str()),
@@ -372,9 +411,62 @@ def purchase_save():
         date=data.get('date', today_str()),
         notes=data.get('notes', ''))
     db.session.add(p)
-    mat = RawMaterial.query.get(rm_id)
-    if mat:
-        mat.current_stock = (mat.current_stock or 0) + qty
+    db.session.flush()
+    for it in items_data:
+        rm_id = int(it.get('rm_id', 0))
+        qty = float(it.get('qty', 0))
+        price = float(it.get('price', 0))
+        item = PurchaseItem(purchase_id=p.id, raw_material_id=rm_id,
+            quantity=qty, unit_price=price)
+        db.session.add(item)
+        mat = RawMaterial.query.get(rm_id)
+        if mat:
+            mat.current_stock = (mat.current_stock or 0) + qty
+    db.session.commit()
+    return redirect(url_for('purchases'))
+
+@app.route('/purchases/update/<int:id>', methods=['POST'])
+@login_required
+@admin_required
+def purchase_update(id):
+    p = Purchase.query.get(id)
+    if not p:
+        flash('Purchase not found', 'danger')
+        return redirect(url_for('purchases'))
+    data = request.form
+    items_data = json.loads(data.get('items_json', '[]'))
+    if not items_data:
+        flash('Add at least one item', 'danger')
+        return redirect(url_for('purchases'))
+    total = float(data.get('total_cost', 0)) or sum(float(it.get('qty', 0)) * float(it.get('price', 0)) for it in items_data)
+    paid = min(float(data.get('paid_amount') or 0), total)
+    # Reverse old stock
+    for item in p.items.all():
+        mat = RawMaterial.query.get(item.raw_material_id)
+        if mat:
+            mat.current_stock = max(0, (mat.current_stock or 0) - item.quantity)
+        db.session.delete(item)
+    # Update purchase header
+    p.supplier_id = data.get('supplier_id') and int(data['supplier_id']) or None
+    p.supplier_name = data.get('supplier_name', '')
+    p.total_cost = total
+    p.paid_amount = paid
+    p.balance = total - paid
+    p.payment_method = data.get('payment_method', 'Cash')
+    p.payment_date = data.get('payment_date', today_str())
+    p.invoice_no = data.get('invoice_no', '')
+    p.date = data.get('date', today_str())
+    p.notes = data.get('notes', '')
+    for it in items_data:
+        rm_id = int(it.get('rm_id', 0))
+        qty = float(it.get('qty', 0))
+        price = float(it.get('price', 0))
+        item = PurchaseItem(purchase_id=p.id, raw_material_id=rm_id,
+            quantity=qty, unit_price=price)
+        db.session.add(item)
+        mat = RawMaterial.query.get(rm_id)
+        if mat:
+            mat.current_stock = (mat.current_stock or 0) + qty
     db.session.commit()
     return redirect(url_for('purchases'))
 
@@ -383,8 +475,13 @@ def purchase_save():
 def purchase_data(id):
     p = Purchase.query.get(id)
     if not p: return jsonify({})
+    items = [{'id': it.id, 'raw_material_id': it.raw_material_id,
+        'quantity': it.quantity, 'unit_price': it.unit_price} for it in p.items.all()]
     return jsonify({'id': p.id, 'supplier_name': p.supplier_name,
-        'total_cost': p.total_cost, 'paid_amount': p.paid_amount, 'balance': p.balance})
+        'total_cost': p.total_cost, 'paid_amount': p.paid_amount, 'balance': p.balance,
+        'supplier_id': p.supplier_id, 'invoice_no': p.invoice_no, 'date': p.date,
+        'payment_method': p.payment_method, 'payment_date': p.payment_date,
+        'notes': p.notes, 'items': items})
 
 @app.route('/purchases/pay', methods=['POST'])
 @login_required
@@ -413,8 +510,10 @@ def purchase_pay():
 def purchase_delete(id):
     p = Purchase.query.get(id)
     if p:
-        mat = RawMaterial.query.get(p.raw_material_id)
-        if mat: mat.current_stock = max(0, (mat.current_stock or 0) - p.quantity)
+        for item in p.items.all():
+            mat = RawMaterial.query.get(item.raw_material_id)
+            if mat:
+                mat.current_stock = max(0, (mat.current_stock or 0) - item.quantity)
         db.session.delete(p)
         db.session.commit()
     return redirect(url_for('purchases'))
@@ -663,6 +762,118 @@ def download(filename):
     from flask import send_from_directory
     return send_from_directory(app.instance_path or '.', filename, as_attachment=True)
 
+# ===== CARS =====
+@app.route('/cars')
+@login_required
+def cars():
+    items = Car.query.all()
+    return render_template('cars.html', items=items, fmt_num=fmt_num, fmt_money=fmt_money)
+
+@app.route('/cars/save', methods=['POST'])
+@login_required
+@admin_required
+def car_save():
+    data = request.form
+    if data.get('id'):
+        car = Car.query.get(int(data['id']))
+        if car:
+            car.registration = data['registration']
+            car.make = data['make']; car.model = data.get('model', '')
+            car.year = int(data.get('year', 0) or 0)
+            car.vehicle_type = data.get('vehicle_type', 'Pickup')
+            car.fuel_type = data.get('fuel_type', 'Diesel')
+            car.mileage = float(data.get('mileage', 0) or 0)
+            car.purchase_date = data.get('purchase_date', '')
+            car.purchase_price = float(data.get('purchase_price', 0) or 0)
+            car.status = data.get('status', 'Active')
+            car.insurance_expiry = data.get('insurance_expiry', '')
+            car.service_mileage = float(data.get('service_mileage', 0) or 0)
+            car.notes = data.get('notes', '')
+    else:
+        car = Car(
+            registration=data['registration'], make=data['make'],
+            model=data.get('model', ''), year=int(data.get('year', 0) or 0),
+            vehicle_type=data.get('vehicle_type', 'Pickup'),
+            fuel_type=data.get('fuel_type', 'Diesel'),
+            mileage=float(data.get('mileage', 0) or 0),
+            purchase_date=data.get('purchase_date', ''),
+            purchase_price=float(data.get('purchase_price', 0) or 0),
+            status=data.get('status', 'Active'),
+            insurance_expiry=data.get('insurance_expiry', ''),
+            service_mileage=float(data.get('service_mileage', 0) or 0),
+            notes=data.get('notes', ''))
+        db.session.add(car)
+    db.session.commit()
+    return redirect(url_for('cars'))
+
+@app.route('/cars/delete/<int:id>')
+@login_required
+@admin_required
+def car_delete(id):
+    car = Car.query.get(id)
+    if car: db.session.delete(car); db.session.commit()
+    return redirect(url_for('cars'))
+
+@app.route('/cars/edit/<int:id>')
+@login_required
+def car_edit(id):
+    car = Car.query.get(id)
+    if not car: return jsonify({})
+    return jsonify({
+        'id': car.id, 'registration': car.registration, 'make': car.make,
+        'model': car.model, 'year': car.year, 'vehicle_type': car.vehicle_type,
+        'fuel_type': car.fuel_type, 'mileage': car.mileage,
+        'purchase_date': car.purchase_date, 'purchase_price': car.purchase_price,
+        'status': car.status, 'insurance_expiry': car.insurance_expiry,
+        'service_mileage': car.service_mileage, 'notes': car.notes or ''
+    })
+
+# ===== MILEAGE LOG =====
+@app.route('/cars/mileage/<int:car_id>')
+@login_required
+def car_mileage(car_id):
+    logs = MileageLog.query.filter_by(car_id=car_id).order_by(MileageLog.date.desc(), MileageLog.id.desc()).all()
+    return jsonify([{
+        'id': l.id, 'date': l.date, 'reading': l.reading,
+        'distance': l.distance, 'notes': l.notes or ''
+    } for l in logs])
+
+@app.route('/cars/mileage/save', methods=['POST'])
+@login_required
+@admin_required
+def car_mileage_save():
+    data = request.form
+    car_id = int(data['car_id'])
+    date = data.get('date', today_str())
+    reading = float(data.get('reading', 0))
+    notes = data.get('notes', '')
+
+    # Get the last reading to compute distance
+    last = MileageLog.query.filter_by(car_id=car_id).order_by(MileageLog.date.desc(), MileageLog.id.desc()).first()
+    prev = last.reading if last else Car.query.get(car_id).mileage or 0
+    distance = max(0, reading - prev)
+
+    log = MileageLog(car_id=car_id, date=date, reading=reading, distance=distance, notes=notes)
+    db.session.add(log)
+
+    # Update car's current mileage
+    car = Car.query.get(car_id)
+    if car:
+        car.mileage = max(car.mileage or 0, reading)
+
+    db.session.commit()
+    return redirect(url_for('cars'))
+
+@app.route('/cars/mileage/delete/<int:id>')
+@login_required
+@admin_required
+def car_mileage_delete(id):
+    log = MileageLog.query.get(id)
+    if log:
+        db.session.delete(log)
+        db.session.commit()
+    return redirect(url_for('cars'))
+
 # ===== DATA IMPORT =====
 @app.route('/import')
 @login_required
@@ -855,6 +1066,27 @@ def import_upload():
     flash(msg, 'success' if not errors else 'warning')
     return redirect(url_for('import_page'))
 
+# ===== ERROR HANDLERS =====
+import logging
+from logging.handlers import RotatingFileHandler
+
+@app.errorhandler(404)
+def not_found(e):
+    app.logger.warning('404: %s', request.path)
+    return render_template('404.html'), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    app.logger.error('500: %s - %s', request.path, str(e))
+    db.session.rollback()
+    return render_template('500.html'), 500
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    app.logger.critical('Unhandled: %s - %s', request.path, str(e))
+    db.session.rollback()
+    return render_template('500.html', error=str(e)), 500
+
 # ===== INIT =====
 with app.app_context():
     db.create_all()
@@ -878,8 +1110,32 @@ with app.app_context():
     old = User.query.filter_by(username='admin').first()
     if old:
         db.session.delete(old)
+    # Migrate old single-item purchases to PurchaseItem (idempotent, runs once)
+    for p in Purchase.query.filter(Purchase.raw_material_id > 0).all():
+        existing = PurchaseItem.query.filter_by(purchase_id=p.id).count()
+        if existing == 0 and p.raw_material_id:
+            item = PurchaseItem(purchase_id=p.id, raw_material_id=p.raw_material_id,
+                quantity=p.quantity or 0, unit_price=p.unit_price or 0)
+            db.session.add(item)
+            db.session.flush()
+    # Deduplicate only old-style purchases (raw_material_id > 0) that should have 1 item
+    for p in Purchase.query.filter(Purchase.raw_material_id > 0).all():
+        its = PurchaseItem.query.filter_by(purchase_id=p.id).order_by(PurchaseItem.id).all()
+        if len(its) > 1:
+            for d in its[1:]:
+                db.session.delete(d)
     db.session.commit()
     print('Users ready')
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    log_file = os.path.join(_basedir, 'app.log')
+    handler = RotatingFileHandler(log_file, maxBytes=2*1024*1024, backupCount=3)
+    handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+    app.logger.addHandler(handler)
+    app.logger.setLevel(logging.INFO)
+    app.logger.info('Server starting on port 5000')
+    from waitress import serve
+    try:
+        serve(app, host='0.0.0.0', port=5000, threads=4)
+    except Exception as e:
+        app.logger.critical('Server crashed: %s', e)

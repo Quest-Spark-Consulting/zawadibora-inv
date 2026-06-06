@@ -86,6 +86,7 @@ function collectIngredients() {
   document.getElementById('ingredientsJson').value = JSON.stringify(ings);
   return true;
 }
+function showForm() { new bootstrap.Modal(document.getElementById('formModal')).show(); }
 function del(id) { if (confirm('Delete production batch? Stock will reverse.')) window.location = '/production/delete/' + id; }
 </script>
 {% endblock %}

@@ -1,0 +1,257 @@
+{% extends "base.html" %}
+{% block content %}
+<h4 class="page-title"><i class="bi bi-car-front"></i> Cars / Vehicles</h4>
+{% if current_user.role == 'admin' %}
+<button class="btn btn-gold mb-3" onclick="showForm()"><i class="bi bi-plus-lg"></i> Add Car</button>
+{% endif %}
+<div class="card">
+  <div class="card-body p-0">
+    <div class="table-responsive">
+    <table class="table table-hover mb-0">
+      <thead><tr><th>Reg No</th><th>Make/Model</th><th>Type</th><th>Fuel</th><th>Mileage</th><th>Status</th><th>Insurance</th><th>Service Due</th>{% if current_user.role == 'admin' %}<th></th>{% endif %}</tr></thead>
+      <tbody>{% for c in items %}
+        <tr>
+          <td><strong>{{ c.registration }}</strong></td>
+          <td>{{ c.make }} {{ c.model }}</td>
+          <td>{{ c.vehicle_type }}</td>
+          <td>{{ c.fuel_type }}</td>
+          <td>{{ fmt_num(c.mileage) }} km</td>
+          <td>
+            {% if c.status == 'Active' %}<span class="badge bg-success">Active</span>
+            {% elif c.status == 'Maintenance' %}<span class="badge bg-warning text-dark">Maintenance</span>
+            {% elif c.status == 'Retired' %}<span class="badge bg-secondary">Retired</span>
+            {% elif c.status == 'Sold' %}<span class="badge bg-info">Sold</span>
+            {% endif %}
+          </td>
+          <td>{{ c.insurance_expiry or '—' }}</td>
+          <td>{{ fmt_num(c.service_mileage) + ' km' if c.service_mileage else '—' }}</td>
+          {% if current_user.role == 'admin' %}
+          <td style="white-space:nowrap">
+            <button class="btn btn-sm btn-outline-info" onclick="showMileage({{ c.id }}, '{{ c.registration }}')" title="Mileage Log"><i class="bi bi-speedometer2"></i></button>
+            <button class="btn btn-sm btn-outline-primary" onclick="showForm({{ c.id }})"><i class="bi bi-pencil"></i></button>
+            <button class="btn btn-sm btn-outline-danger" onclick="del({{ c.id }})"><i class="bi bi-trash"></i></button>
+          </td>{% endif %}
+        </tr>{% endfor %}
+        {% if not items %}
+        <tr><td colspan="9" class="text-center py-4 text-muted">No cars registered yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
+{% if current_user.role == 'admin' %}
+<!-- Car Form Modal -->
+<div class="modal fade" id="formModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header" style="background:#1a3c34;color:#fff;">
+        <h5 class="modal-title" id="modalTitle">Add Car</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="/cars/save">
+        <div class="modal-body">
+          <input type="hidden" name="id" id="editId">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Registration *</label>
+              <input type="text" name="registration" id="f_reg" class="form-control" required placeholder="e.g. KCA 123T">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Make *</label>
+              <input type="text" name="make" id="f_make" class="form-control" required placeholder="e.g. Toyota">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Model</label>
+              <input type="text" name="model" id="f_model" class="form-control" placeholder="e.g. Hilux">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Year</label>
+              <input type="number" name="year" id="f_year" class="form-control" placeholder="2020">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Type</label>
+              <select name="vehicle_type" id="f_type" class="form-select">
+                <option value="Pickup">Pickup</option>
+                <option value="Truck">Truck</option>
+                <option value="Van">Van</option>
+                <option value="SUV">SUV</option>
+                <option value="Sedan">Sedan</option>
+                <option value="Tractor">Tractor</option>
+                <option value="Motorbike">Motorbike</option>
+                <option value="Trailer">Trailer</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Fuel Type</label>
+              <select name="fuel_type" id="f_fuel" class="form-select">
+                <option value="Diesel">Diesel</option>
+                <option value="Petrol">Petrol</option>
+                <option value="Electric">Electric</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Status</label>
+              <select name="status" id="f_status" class="form-select">
+                <option value="Active">Active</option>
+                <option value="Maintenance">Maintenance</option>
+                <option value="Retired">Retired</option>
+                <option value="Sold">Sold</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Mileage (km)</label>
+              <input type="number" name="mileage" id="f_mileage" class="form-control" step="0.1">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Purchase Date</label>
+              <input type="date" name="purchase_date" id="f_purchase_date" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Purchase Price (KSh)</label>
+              <input type="number" name="purchase_price" id="f_purchase_price" class="form-control" step="0.01">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Insurance Expiry</label>
+              <input type="date" name="insurance_expiry" id="f_insurance" class="form-control">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Service Due at (km)</label>
+              <input type="number" name="service_mileage" id="f_service" class="form-control" step="0.1">
+            </div>
+            <div class="col-12">
+              <label class="form-label">Notes</label>
+              <textarea name="notes" id="f_notes" class="form-control" rows="2" placeholder="Service history, issues, etc."></textarea>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<!-- Mileage Log Modal -->
+<div class="modal fade" id="mileageModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header" style="background:#1a3c34;color:#fff;">
+        <h5 class="modal-title"><i class="bi bi-speedometer2"></i> Mileage Log: <span id="mileageCarReg"></span></h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="mileageCarId">
+        <!-- Add entry form -->
+        <form method="POST" action="/cars/mileage/save" class="row g-2 mb-3 p-3 bg-light rounded">
+          <input type="hidden" name="car_id" id="mileageCarIdInput">
+          <div class="col-md-4">
+            <label class="form-label small">Date</label>
+            <input type="date" name="date" id="m_date" class="form-control form-control-sm" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Odometer Reading (km)</label>
+            <input type="number" name="reading" id="m_reading" class="form-control form-control-sm" step="0.1" required>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Notes</label>
+            <input type="text" name="notes" id="m_notes" class="form-control form-control-sm" placeholder="e.g. Trip to Nairobi">
+          </div>
+          <div class="col-12 mt-2">
+            <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-plus-lg"></i> Log Mileage</button>
+          </div>
+        </form>
+        <!-- History table -->
+        <div class="table-responsive">
+          <table class="table table-sm table-bordered mb-0">
+            <thead><tr><th>Date</th><th>Reading (km)</th><th>Distance (km)</th><th>Notes</th><th></th></tr></thead>
+            <tbody id="mileageLogBody"></tbody>
+          </table>
+        </div>
+        <p id="mileageEmpty" class="text-center text-muted py-3 d-none">No mileage entries yet.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showForm(id) {
+  document.getElementById('editId').value = id || '';
+  document.getElementById('modalTitle').textContent = id ? 'Edit Car' : 'Add Car';
+  ['f_reg','f_make','f_model','f_year','f_mileage','f_purchase_date','f_purchase_price','f_insurance','f_service','f_notes'].forEach(f => document.getElementById(f).value = '');
+  document.getElementById('f_type').value = 'Pickup';
+  document.getElementById('f_fuel').value = 'Diesel';
+  document.getElementById('f_status').value = 'Active';
+  if (id) {
+    fetch(`/cars/edit/${id}`).then(r=>r.json()).then(d => {
+      document.getElementById('f_reg').value = d.registration;
+      document.getElementById('f_make').value = d.make;
+      document.getElementById('f_model').value = d.model || '';
+      document.getElementById('f_year').value = d.year || '';
+      document.getElementById('f_type').value = d.vehicle_type || 'Pickup';
+      document.getElementById('f_fuel').value = d.fuel_type || 'Diesel';
+      document.getElementById('f_status').value = d.status || 'Active';
+      document.getElementById('f_mileage').value = d.mileage || '';
+      document.getElementById('f_purchase_date').value = d.purchase_date || '';
+      document.getElementById('f_purchase_price').value = d.purchase_price || '';
+      document.getElementById('f_insurance').value = d.insurance_expiry || '';
+      document.getElementById('f_service').value = d.service_mileage || '';
+      document.getElementById('f_notes').value = d.notes || '';
+    });
+  }
+  new bootstrap.Modal(document.getElementById('formModal')).show();
+}
+function del(id) { if (confirm('Delete this car?')) window.location = '/cars/delete/' + id; }
+
+// ===== MILEAGE LOG =====
+function showMileage(carId, reg) {
+  document.getElementById('mileageCarReg').textContent = reg;
+  document.getElementById('mileageCarId').value = carId;
+  document.getElementById('mileageCarIdInput').value = carId;
+  document.getElementById('m_date').value = new Date().toISOString().split('T')[0];
+  document.getElementById('m_reading').value = '';
+  document.getElementById('m_notes').value = '';
+  loadMileage(carId);
+  new bootstrap.Modal(document.getElementById('mileageModal')).show();
+}
+function loadMileage(carId) {
+  fetch(`/cars/mileage/${carId}`).then(r=>r.json()).then(logs => {
+    const tbody = document.getElementById('mileageLogBody');
+    const empty = document.getElementById('mileageEmpty');
+    if (logs.length === 0) {
+      tbody.innerHTML = '';
+      empty.classList.remove('d-none');
+      return;
+    }
+    empty.classList.add('d-none');
+    let totalDist = 0;
+    tbody.innerHTML = logs.map((l, i) => {
+      totalDist += l.distance || 0;
+      return `<tr>
+        <td>${l.date || '—'}</td>
+        <td><strong>${fmtNum(l.reading)}</strong></td>
+        <td>${l.distance ? fmtNum(l.distance) + ' km' : '—'}</td>
+        <td style="font-size:.82rem;color:#555">${l.notes || '—'}</td>
+        <td><button class="btn btn-sm btn-outline-danger" onclick="delMileage(${l.id})"><i class="bi bi-x"></i></button></td>
+      </tr>`;
+    }).join('');
+    tbody.innerHTML += `<tr class="table-active fw-bold"><td>TOTAL</td><td></td><td>${fmtNum(totalDist)} km</td><td></td><td></td></tr>`;
+  });
+}
+function delMileage(id) {
+  if (confirm('Delete this mileage entry?')) {
+    window.location = '/cars/mileage/delete/' + id;
+  }
+}
+function fmtNum(n) { return Number(n).toLocaleString('en-KE', {minimumFractionDigits:0, maximumFractionDigits:0}); }
+</script>
+{% endblock %}

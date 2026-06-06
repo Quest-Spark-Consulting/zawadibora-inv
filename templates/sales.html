@@ -117,6 +117,7 @@ function payForm(id) {
   });
   new bootstrap.Modal(document.getElementById('payModal')).show();
 }
+function showForm() { new bootstrap.Modal(document.getElementById('formModal')).show(); }
 function del(id) { if (confirm('Delete sale? Stock restored.')) window.location = '/sales/delete/' + id; }
 </script>
 {% endblock %}
